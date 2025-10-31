@@ -1,16 +1,13 @@
 import sys
 import heapq
-from typing import Tuple, List, Dict, FrozenSet
+from typing import Tuple, List
 
-# Кэш для хешей состояний
-_state_cache = {}
-
-class AmphipodState:
+class State:
     __slots__ = ('rooms', 'hallway', 'energy', 'room_depth', 'hash_val')
     
     def __init__(self, rooms, hallway, energy, room_depth):
-        self.rooms = rooms  # tuple of tuples, каждый room - tuple символов
-        self.hallway = hallway  # tuple из 11 элементов (None или символ)
+        self.rooms = rooms  # tuple of tuples
+        self.hallway = hallway  # tuple of 11 elements
         self.energy = energy
         self.room_depth = room_depth
         self.hash_val = None
@@ -26,11 +23,8 @@ class AmphipodState:
     def __lt__(self, other):
         return self.energy < other.energy
 
-def parse_input(lines: List[str]) -> AmphipodState:
-    """Парсит входные данные и создает начальное состояние"""
+def parse_input(lines: List[str]) -> State:
     room_depth = len(lines) - 3
-    
-    # Инициализируем комнаты
     rooms = [[] for _ in range(4)]
     hallway = [None] * 11
     
@@ -45,99 +39,96 @@ def parse_input(lines: List[str]) -> AmphipodState:
                 if char_pos < len(line) and line[char_pos] in 'ABCD':
                     rooms[room_idx].append(line[char_pos])
     
-    # Преобразуем в кортежи
+    # Реверсируем комнаты чтобы глубина 0 была ближе к коридору
+    for i in range(4):
+        rooms[i] = list(reversed(rooms[i]))
+    
     rooms_tuple = tuple(tuple(room) for room in rooms)
     hallway_tuple = tuple(hallway)
     
-    return AmphipodState(rooms_tuple, hallway_tuple, 0, room_depth)
+    return State(rooms_tuple, hallway_tuple, 0, room_depth)
 
-def get_move_cost(amphipod: str) -> int:
-    """Возвращает стоимость перемещения для типа амфипода"""
+def get_cost(amphipod: str) -> int:
     return {'A': 1, 'B': 10, 'C': 100, 'D': 1000}[amphipod]
 
 def get_target_room(amphipod: str) -> int:
-    """Возвращает целевую комнату для амфипода"""
     return {'A': 0, 'B': 1, 'C': 2, 'D': 3}[amphipod]
 
-def is_room_complete(room: Tuple[str, ...], room_index: int, room_depth: int) -> bool:
-    """Проверяет, заполнена ли комната правильными амфиподами"""
-    if len(room) != room_depth:
-        return False
-    target_char = 'ABCD'[room_index]
+def is_room_available(room: Tuple, room_idx: int, room_depth: int) -> bool:
+    """Комната доступна если она пустая или содержит только правильных амфиподов"""
+    if not room:
+        return True
+    
+    target_char = 'ABCD'[room_idx]
     return all(c == target_char for c in room)
 
+def get_room_position(room_idx: int) -> int:
+    return [2, 4, 6, 8][room_idx]
+
 def is_path_clear(hallway: Tuple, start: int, end: int) -> bool:
-    """Проверяет, свободен ли путь в коридоре"""
+    if start == end:
+        return True
+    
     step = 1 if end > start else -1
-    for pos in range(start + step, end + step, step):
-        if hallway[pos] is not None:
+    current = start + step
+    while current != end + step:
+        if hallway[current] is not None:
             return False
+        current += step
     return True
 
-def can_move_to_room(room: Tuple[str, ...], room_index: int, amphipod: str, room_depth: int) -> bool:
-    """Проверяет, может ли амфипод переместиться в комнату"""
-    # Комната должна быть целевой для этого амфипода
-    if room_index != get_target_room(amphipod):
-        return False
+def get_available_hallway_positions(hallway: Tuple, start_pos: int) -> List[int]:
+    """Возвращает доступные позиции в коридоре из заданной позиции"""
+    available = []
     
-    # В комнате должны быть только правильные амфиподы
-    for c in room:
-        if c != amphipod:
-            return False
+    # Двигаемся влево
+    pos = start_pos - 1
+    while pos >= 0:
+        if hallway[pos] is not None:
+            break
+        if pos not in [2, 4, 6, 8]:  # Запрещенные позиции остановки
+            available.append(pos)
+        pos -= 1
     
-    # В комнате должно быть место
-    return len(room) < room_depth
-
-def get_room_position(room_index: int) -> int:
-    """Возвращает позицию комнаты в коридоре"""
-    return [2, 4, 6, 8][room_index]
+    # Двигаемся вправо
+    pos = start_pos + 1
+    while pos < 11:
+        if hallway[pos] is not None:
+            break
+        if pos not in [2, 4, 6, 8]:  # Запрещенные позиции остановки
+            available.append(pos)
+        pos += 1
+    
+    return available
 
 def solve(lines: list[str]) -> int:
-    """
-    Решение задачи о сортировке в лабиринте с оптимизациями
-    """
     initial_state = parse_input(lines)
-    
-    # Приоритетная очередь для алгоритма Дейкстры
     heap = []
     heapq.heappush(heap, (initial_state.energy, initial_state))
-    
-    # Словарь для хранения минимальной энергии для каждого состояния
-    min_energy = {initial_state: 0}
+    visited = {initial_state: initial_state.energy}
     
     room_positions = [2, 4, 6, 8]
-    forbidden_stops = set(room_positions)
-    
-    best_energy = float('inf')
     
     while heap:
-        current_energy, current_state = heapq.heappop(heap)
+        current_energy, state = heapq.heappop(heap)
         
-        # Если нашли решение хуже лучшего, пропускаем
-        if current_energy >= best_energy:
-            continue
-        
-        # Если мы уже нашли лучший путь к этому состоянию, пропускаем
-        if current_energy > min_energy.get(current_state, float('inf')):
-            continue
-        
-        # Проверяем, является ли состояние целевым
-        is_goal = True
+        # Проверяем цель
+        goal_reached = True
         for i in range(4):
-            if not is_room_complete(current_state.rooms[i], i, current_state.room_depth):
-                is_goal = False
+            target_char = 'ABCD'[i]
+            if len(state.rooms[i]) != state.room_depth or not all(c == target_char for c in state.rooms[i]):
+                goal_reached = False
                 break
         
-        if is_goal:
-            best_energy = min(best_energy, current_energy)
+        if goal_reached:
+            return state.energy
+        
+        if current_energy > visited.get(state, float('inf')):
             continue
         
-        # Оптимизация: сначала пытаемся переместить амфиподы прямо в их комнаты
-        moved_directly = False
-        
-        # 1. Попытка переместить амфиподы из коридора прямо в их комнаты
+        # 1. Перемещение из коридора в комнаты
         for hallway_pos in range(11):
-            amphipod = current_state.hallway[hallway_pos]
+            amphipod = state.hallway[hallway_pos]
             if amphipod is None:
                 continue
             
@@ -145,102 +136,95 @@ def solve(lines: list[str]) -> int:
             room_pos = room_positions[target_room]
             
             # Проверяем возможность перемещения в комнату
-            if (can_move_to_room(current_state.rooms[target_room], target_room, amphipod, current_state.room_depth) and
-                is_path_clear(current_state.hallway, hallway_pos, room_pos)):
+            if (is_room_available(state.rooms[target_room], target_room, state.room_depth) and
+                is_path_clear(state.hallway, hallway_pos, room_pos)):
                 
-                # Вычисляем стоимость
-                steps = abs(hallway_pos - room_pos)
-                steps += (current_state.room_depth - len(current_state.rooms[target_room]))
-                energy_cost = steps * get_move_cost(amphipod)
+                # Количество шагов
+                hallway_steps = abs(hallway_pos - room_pos)
+                room_steps = state.room_depth - len(state.rooms[target_room])
+                total_steps = hallway_steps + room_steps
+                
+                energy_cost = total_steps * get_cost(amphipod)
                 
                 # Создаем новое состояние
-                new_rooms = list(current_state.rooms)
+                new_rooms = list(state.rooms)
                 new_room = list(new_rooms[target_room])
                 new_room.append(amphipod)
                 new_rooms[target_room] = tuple(new_room)
                 
-                new_hallway = list(current_state.hallway)
+                new_hallway = list(state.hallway)
                 new_hallway[hallway_pos] = None
                 
-                new_state = AmphipodState(
-                    tuple(new_rooms), 
-                    tuple(new_hallway), 
-                    current_state.energy + energy_cost,
-                    current_state.room_depth
+                new_state = State(
+                    tuple(new_rooms),
+                    tuple(new_hallway),
+                    state.energy + energy_cost,
+                    state.room_depth
                 )
                 
-                if new_state.energy < min_energy.get(new_state, float('inf')):
-                    min_energy[new_state] = new_state.energy
+                if new_state.energy < visited.get(new_state, float('inf')):
+                    visited[new_state] = new_state.energy
                     heapq.heappush(heap, (new_state.energy, new_state))
-                
-                moved_directly = True
         
-        if moved_directly:
-            continue
-        
-        # 2. Перемещение амфиподов из комнат в коридор
+        # 2. Перемещение из комнат в коридор
         for room_idx in range(4):
-            room = current_state.rooms[room_idx]
+            room = state.rooms[room_idx]
             if not room:
                 continue
             
-            # Если комната уже завершена, не перемещаем из нее
-            if is_room_complete(room, room_idx, current_state.room_depth):
-                continue
-            
-            # Проверяем, есть ли неправильные амфиподы в комнате
-            has_wrong_amphipod = False
+            # Проверяем, нужно ли перемещать амфиподы из этой комнаты
+            target_char = 'ABCD'[room_idx]
+            room_correct = True
             for amphipod in room:
-                if get_target_room(amphipod) != room_idx:
-                    has_wrong_amphipod = True
+                if amphipod != target_char:
+                    room_correct = False
                     break
             
-            # Если в комнате только правильные амфиподы, не перемещаем из нее
-            if not has_wrong_amphipod:
+            # Если все амфиподы в комнате правильные, не перемещаем
+            if room_correct:
                 continue
             
-            # Берем верхний амфипод из комнаты
+            # Берем верхний амфипод
             amphipod = room[-1]
             room_pos = room_positions[room_idx]
             
-            # Глубина амфипода в комнате
-            depth_in_room = current_state.room_depth - len(room) + 1
+            # Количество шагов чтобы выйти из комнаты
+            room_exit_steps = state.room_depth - len(room) + 1
             
-            # Пытаемся переместить в различные позиции коридора
-            for target_pos in range(11):
-                if target_pos in forbidden_stops:
-                    continue
+            # Находим доступные позиции в коридоре
+            available_positions = get_available_hallway_positions(state.hallway, room_pos)
+            
+            for target_pos in available_positions:
+                hallway_steps = abs(room_pos - target_pos)
+                total_steps = room_exit_steps + hallway_steps
+                energy_cost = total_steps * get_cost(amphipod)
                 
-                if is_path_clear(current_state.hallway, room_pos, target_pos):
-                    steps = depth_in_room + abs(room_pos - target_pos)
-                    energy_cost = steps * get_move_cost(amphipod)
-                    
-                    # Создаем новое состояние
-                    new_rooms = list(current_state.rooms)
-                    new_room = list(room[:-1])  # Убираем верхний амфипод
-                    new_rooms[room_idx] = tuple(new_room)
-                    
-                    new_hallway = list(current_state.hallway)
-                    new_hallway[target_pos] = amphipod
-                    
-                    new_state = AmphipodState(
-                        tuple(new_rooms), 
-                        tuple(new_hallway), 
-                        current_state.energy + energy_cost,
-                        current_state.room_depth
-                    )
-                    
-                    if new_state.energy < min_energy.get(new_state, float('inf')):
-                        min_energy[new_state] = new_state.energy
-                        heapq.heappush(heap, (new_state.energy, new_state))
+                # Создаем новое состояние
+                new_rooms = list(state.rooms)
+                new_room = list(room[:-1])  # Убираем верхний амфипод
+                new_rooms[room_idx] = tuple(new_room)
+                
+                new_hallway = list(state.hallway)
+                new_hallway[target_pos] = amphipod
+                
+                new_state = State(
+                    tuple(new_rooms),
+                    tuple(new_hallway),
+                    state.energy + energy_cost,
+                    state.room_depth
+                )
+                
+                if new_state.energy < visited.get(new_state, float('inf')):
+                    visited[new_state] = new_state.energy
+                    heapq.heappush(heap, (new_state.energy, new_state))
     
-    return best_energy if best_energy != float('inf') else -1
+    return -1
 
 def main():
     lines = []
     for line in sys.stdin:
         lines.append(line.rstrip('\n'))
-
+    
     result = solve(lines)
     print(result)
 
