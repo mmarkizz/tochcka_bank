@@ -1,18 +1,14 @@
 import sys
 from collections import deque, defaultdict
-import heapq
 
 def solve(edges: list[tuple[str, str]]) -> list[str]:
-    
     graph = defaultdict(list)
     gateways = set()
-    nodes = set()
     
+    # Строим граф
     for u, v in edges:
         graph[u].append(v)
         graph[v].append(u)
-        nodes.add(u)
-        nodes.add(v)
         if u.isupper():
             gateways.add(u)
         if v.isupper():
@@ -21,33 +17,24 @@ def solve(edges: list[tuple[str, str]]) -> list[str]:
     virus_pos = 'a'
     result = []
     
-    def get_gate_edges():
-        gate_edges = []
-        for gate in sorted(gateways):
-            for neighbor in sorted(graph[gate]):
-                if neighbor.islower():  # только к обычным узлам
-                    gate_edges.append(f"{gate}-{neighbor}")
-        return gate_edges
-    
-    def bfs_distances(start):
-        """Вычисляет расстояния от стартовой позиции до всех узлов"""
+    def bfs(start):
         dist = {start: 0}
+        prev = {start: None}
         queue = deque([start])
         
         while queue:
             current = queue.popleft()
-            for neighbor in graph[current]:
+            for neighbor in sorted(graph[current]):  # сортируем для детерминизма
                 if neighbor not in dist:
                     dist[neighbor] = dist[current] + 1
+                    prev[neighbor] = current
                     queue.append(neighbor)
-        return dist
+        return dist, prev
     
-    def find_target_gateway(virus_position):
-        """Находит целевой шлюз для вируса"""
-        dist = bfs_distances(virus_position)
-        
-        min_dist = float('inf')
+    def get_target_gateway(pos):
+        dist, _ = bfs(pos)
         candidate_gates = []
+        min_dist = float('inf')
         
         for gate in gateways:
             if gate in dist:
@@ -59,88 +46,60 @@ def solve(edges: list[tuple[str, str]]) -> list[str]:
         
         return min(candidate_gates) if candidate_gates else None
     
-    def find_next_move(virus_position, target_gate):
-        """Находит следующий ход вируса"""
-        dist = bfs_distances(target_gate)
-        
-        candidates = []
-        for neighbor in sorted(graph[virus_position]):
-            if neighbor in dist:
-                candidates.append((dist[neighbor], neighbor))
-        
-        if not candidates:
-            return None
-        
-        min_dist = min(candidates)[0]
-        best_candidates = [neighbor for dist, neighbor in candidates if dist == min_dist]
-        
-        return min(best_candidates)
+    def get_next_move(pos, target_gate):
+        _, prev = bfs(target_gate)
+        current = pos
+        while prev[current] != target_gate:
+            current = prev[current]
+        return current
     
-    def is_virus_at_gateway(virus_position):
-        """Проверяет, находится ли вирус рядом со шлюзом"""
-        for neighbor in graph[virus_position]:
-            if neighbor in gateways:
-                return True
-        return False
-    
-    def get_critical_gate_edge(virus_position, target_gate):
-        """Находит критический коридор для отключения"""
-        for neighbor in sorted(graph[virus_position]):
-            if neighbor in gateways:
-                return f"{neighbor}-{virus_position}"
-        
-        dist_from_virus = bfs_distances(virus_position)
-        reachable_gates = [gate for gate in gateways if gate in dist_from_virus]
-        
-        if not reachable_gates:
-            return None
-        
-        available_edges = get_gate_edges()
-        return available_edges[0] if available_edges else None
-    
+    # Основной цикл
     while True:
-        if is_virus_at_gateway(virus_pos):
-            for neighbor in sorted(graph[virus_pos]):
-                if neighbor in gateways:
-                    critical_edge = f"{neighbor}-{virus_pos}"
-                    if critical_edge not in result:
-                        result.append(critical_edge)
-                        graph[neighbor].remove(virus_pos)
-                        graph[virus_pos].remove(neighbor)
-                        break
-           
-            dist = bfs_distances(virus_pos)
-            reachable = any(gate in dist for gate in gateways)
-            if not reachable:
+        # Проверяем непосредственную угрозу
+        immediate_threat = None
+        for neighbor in sorted(graph[virus_pos]):
+            if neighbor in gateways:
+                immediate_threat = f"{neighbor}-{virus_pos}"
                 break
+        
+        if immediate_threat:
+            result.append(immediate_threat)
+            gate, node = immediate_threat.split('-')
+            graph[gate].remove(node)
+            graph[node].remove(gate)
             continue
         
-        target_gate = find_target_gateway(virus_pos)
+        # Находим целевой шлюз
+        target_gate = get_target_gateway(virus_pos)
         if not target_gate:
-            break 
+            break
         
-        critical_edge = get_critical_gate_edge(virus_pos, target_gate)
+        # Находим следующий ход вируса
+        next_pos = get_next_move(virus_pos, target_gate)
+        
+        # Находим критический коридор на пути к шлюзу
+        # Ищем связь между следующим положением вируса и шлюзом
+        critical_edge = None
+        if next_pos in graph[target_gate]:
+            critical_edge = f"{target_gate}-{next_pos}"
+        else:
+            # Ищем любой доступный коридор шлюз-узел
+            available = []
+            for gate in sorted(gateways):
+                for node in sorted(graph[gate]):
+                    if node.islower():
+                        available.append(f"{gate}-{node}")
+            if available:
+                critical_edge = available[0]
+        
         if critical_edge:
             result.append(critical_edge)
             gate, node = critical_edge.split('-')
             graph[gate].remove(node)
             graph[node].remove(gate)
-        else:
-            available_edges = get_gate_edges()
-            if available_edges:
-                critical_edge = available_edges[0]
-                result.append(critical_edge)
-                gate, node = critical_edge.split('-')
-                graph[gate].remove(node)
-                graph[node].remove(gate)
-            else:
-                break  
         
-        next_pos = find_next_move(virus_pos, target_gate)
-        if next_pos:
-            virus_pos = next_pos
-        else:
-            break  
+        # Вирус перемещается
+        virus_pos = next_pos
     
     return result
 
@@ -149,9 +108,9 @@ def main():
     for line in sys.stdin:
         line = line.strip()
         if line:
-            node1, sep, node2 = line.partition('-')
-            if sep:
-                edges.append((node1, node2))
+            parts = line.split('-')
+            if len(parts) == 2:
+                edges.append((parts[0], parts[1]))
 
     result = solve(edges)
     for edge in result:
